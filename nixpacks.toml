@@ -1,10 +1,15 @@
 # Railway / Nixpacks build config for Mandata.
 #
 # Single service:
-#   - install root deps (postinstall recursively installs server/)
-#   - scrape the corpus (cached — fast on rebuilds)
-#   - build the Vite frontend into ./dist
-#   - start the Express backend, which serves /api and falls back to dist/index.html
+#   - install: npm ci (postinstall recursively installs server/ deps)
+#   - build:   scrape corpus, then build Vite frontend into ./dist
+#   - start:   run Express server, which serves /api/* and falls back
+#              to dist/index.html for SPA routes
+#
+# All start commands across nixpacks.toml, Procfile, railway.json, and
+# package.json `start` resolve to the same: `node server/index.mjs`.
+
+providers = ["node"]
 
 [phases.setup]
 nixPkgs = ["nodejs_20"]
@@ -13,10 +18,7 @@ nixPkgs = ["nodejs_20"]
 cmds = ["npm ci"]
 
 [phases.build]
-cmds = [
-  "node scripts/scrape.mjs",
-  "npm run build",
-]
+cmds = ["node scripts/scrape.mjs && npm run build"]
 
 [start]
 cmd = "node server/index.mjs"
