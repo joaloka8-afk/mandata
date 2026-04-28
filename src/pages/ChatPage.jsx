@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 import PageShell from '../components/PageShell.jsx';
 import { MandataMark, AnthropicMark, LlamaMark } from '../components/Logos.jsx';
+import MarkdownAnswer from '../components/MarkdownAnswer.jsx';
 
 const seedConversations = [
   { id: 'c1', title: 'NCS field briefing', updated: 'now', active: true },
@@ -29,7 +30,16 @@ const ChatPage = () => {
   const [providers, setProviders] = useState({});
   const [model, setModel] = useState('claude-sonnet-4-6');
   const [toast, setToast] = useState(null);
+  const [highlightedCite, setHighlightedCite] = useState(null);
   const scrollRef = useRef(null);
+
+  const onCite = (n) => {
+    setHighlightedCite(n);
+    const el = document.getElementById(`cite-${n}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    window.clearTimeout(onCite._t);
+    onCite._t = window.setTimeout(() => setHighlightedCite(null), 1800);
+  };
 
   useEffect(() => {
     fetch('/api/models')
@@ -125,7 +135,7 @@ const ChatPage = () => {
           <div ref={scrollRef} className="scrollbar-thin flex-1 overflow-y-auto px-8 py-8">
             <div className="mx-auto flex max-w-3xl flex-col gap-8">
               {messages.map((m, i) => (
-                <Message key={i} m={m} />
+                <Message key={i} m={m} onCite={onCite} />
               ))}
               {pending && <ThinkingIndicator />}
             </div>
@@ -133,7 +143,7 @@ const ChatPage = () => {
           <Composer value={input} onChange={setInput} onSubmit={onSend} pending={pending} />
         </section>
 
-        <ContextPanel messages={messages} />
+        <ContextPanel messages={messages} highlight={highlightedCite} />
       </div>
     </PageShell>
   );
@@ -295,7 +305,7 @@ const ModelSelector = ({ models, providers, model, setModel }) => {
   );
 };
 
-const Message = ({ m }) => {
+const Message = ({ m, onCite }) => {
   if (m.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -329,15 +339,20 @@ const Message = ({ m }) => {
           )}
         </div>
         <div className={`rounded-2xl rounded-tl-md border bg-ink-900 px-5 py-4 ${isDemo ? 'border-amber-500/20' : 'border-ink-700'}`}>
-          <p className="text-sm leading-relaxed text-ash-200">{m.content}</p>
+          <MarkdownAnswer text={m.content} onCite={onCite} />
           {m.citations && (
             <div className="mt-4 border-t border-ink-700 pt-3">
               <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-ash-500">Citations</div>
               <ul className="space-y-1.5">
                 {m.citations.map((c, i) => (
-                  <li key={i} className="flex items-center justify-between text-xs">
+                  <li key={i} id={`cite-${i + 1}`} className="flex items-center justify-between text-xs">
                     <span className="flex min-w-0 items-center gap-2 text-ash-300">
-                      <span className="rounded-sm border border-ink-600 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ash-400">{i + 1}</span>
+                      <button
+                        onClick={() => onCite?.(i + 1)}
+                        className="rounded-sm border border-ink-600 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ash-400 hover:border-ash-300 hover:text-ash-100"
+                      >
+                        {i + 1}
+                      </button>
                       {c.url ? (
                         <a href={c.url} target="_blank" rel="noreferrer" className="truncate text-ash-100 hover:underline">{c.src}</a>
                       ) : (
@@ -507,7 +522,7 @@ const ComposerWrap = styled.div`
   }
 `;
 
-const ContextPanel = ({ messages }) => {
+const ContextPanel = ({ messages, highlight }) => {
   const last = messages.filter((m) => m.role === 'assistant').slice(-1)[0];
   const cites = last?.citations || [];
   return (
@@ -524,7 +539,13 @@ const ContextPanel = ({ messages }) => {
         )}
         <ul className="space-y-3">
           {cites.map((c, i) => (
-            <li key={i} className="rounded-lg border border-ink-700 bg-ink-850 p-3">
+            <li
+              key={i}
+              id={`panel-cite-${i + 1}`}
+              className={`rounded-lg border bg-ink-850 p-3 transition-colors ${
+                highlight === i + 1 ? 'border-ash-300 shadow-[0_0_0_2px_rgba(232,232,234,0.18)]' : 'border-ink-700'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex min-w-0 items-center gap-2 text-xs">
                   <span className="rounded-sm border border-ink-600 bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ash-400">{i + 1}</span>
