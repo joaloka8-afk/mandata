@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 import PageShell from '../components/PageShell.jsx';
-import { MandataMark } from '../components/Logos.jsx';
+import { MandataMark, AnthropicMark, LlamaMark } from '../components/Logos.jsx';
 
 const seedConversations = [
   { id: 'c1', title: 'NCS field briefing', updated: 'now', active: true },
@@ -26,15 +26,30 @@ const ChatPage = () => {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [models, setModels] = useState([]);
-  const [model, setModel] = useState('claude-sonnet-4-5');
+  const [providers, setProviders] = useState({});
+  const [model, setModel] = useState('claude-sonnet-4-6');
+  const [toast, setToast] = useState(null);
   const scrollRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/models')
-      .then((r) => (r.ok ? r.json() : { models: [] }))
-      .then((d) => setModels(d.models || []))
+      .then((r) => (r.ok ? r.json() : { models: [], providers: {} }))
+      .then((d) => {
+        setModels(d.models || []);
+        setProviders(d.providers || {});
+      })
       .catch(() => {});
   }, []);
+
+  const onSelectModel = (id) => {
+    setModel(id);
+    const m = models.find((x) => x.id === id);
+    if (m) {
+      setToast(`Now using ${m.label} · ${m.provider}${m.available ? '' : ' (demo — key missing)'}`);
+      window.clearTimeout(onSelectModel._t);
+      onSelectModel._t = window.setTimeout(() => setToast(null), 3000);
+    }
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -75,6 +90,8 @@ const ChatPage = () => {
             url: c.url,
           })),
           model: data.model,
+          family: data.family,
+          requestedModel: model,
           usage: data.usage,
         },
       ]);
@@ -99,7 +116,12 @@ const ChatPage = () => {
         <Sidebar conversations={seedConversations} />
 
         <section className="relative flex flex-col border-x border-ink-700 bg-ink-950">
-          <ChatHeader models={models} model={model} setModel={setModel} />
+          <ChatHeader models={models} providers={providers} model={model} setModel={onSelectModel} />
+          {toast && (
+            <div className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-md border border-ink-600 bg-ink-900 px-4 py-2 text-xs text-ash-100 shadow-2xl shadow-black/60 animate-slide-up">
+              {toast}
+            </div>
+          )}
           <div ref={scrollRef} className="scrollbar-thin flex-1 overflow-y-auto px-8 py-8">
             <div className="mx-auto flex max-w-3xl flex-col gap-8">
               {messages.map((m, i) => (
@@ -152,37 +174,123 @@ const Sidebar = ({ conversations }) => (
   </aside>
 );
 
-const ChatHeader = ({ models, model, setModel }) => {
+const ChatHeader = ({ models, providers, model, setModel }) => (
+  <div className="flex items-center justify-between border-b border-ink-700 px-8 py-3">
+    <div>
+      <div className="font-display text-lg text-ash-100">NCS field briefing</div>
+      <div className="font-mono text-[11px] text-ash-500">Corpus · Norwegian Continental Shelf · 103 chunks</div>
+    </div>
+    <div className="flex items-center gap-2 text-xs">
+      <ModelSelector models={models} providers={providers} model={model} setModel={setModel} />
+      <span className="rounded-md border border-ink-600 bg-ink-800 px-2.5 py-1 text-ash-300">corpus · oil-sector</span>
+      <button className="rounded-md border border-ink-600 bg-ink-800 px-2.5 py-1 text-ash-300 hover:bg-ink-700">Export</button>
+    </div>
+  </div>
+);
+
+const FamilyMark = ({ family, size = 14 }) =>
+  family === 'llama' ? (
+    <LlamaMark size={size} className="text-amber-300" />
+  ) : (
+    <AnthropicMark size={size} className="text-emerald-300" />
+  );
+
+const ModelSelector = ({ models, providers, model, setModel }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
   const current = models.find((m) => m.id === model);
-  const family = current?.family || (model.startsWith('llama') ? 'llama' : 'claude');
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const grouped = [
+    { family: 'claude', label: 'Anthropic Claude', items: models.filter((m) => m.family === 'claude') },
+    { family: 'llama', label: 'Meta Llama (via Groq)', items: models.filter((m) => m.family === 'llama') },
+  ];
+
   return (
-    <div className="flex items-center justify-between border-b border-ink-700 px-8 py-3">
-      <div>
-        <div className="font-display text-lg text-ash-100">NCS field briefing</div>
-        <div className="font-mono text-[11px] text-ash-500">Corpus · Norwegian Continental Shelf · 103 chunks</div>
-      </div>
-      <div className="flex items-center gap-2 text-xs">
-        <label className="flex items-center gap-1.5 rounded-md border border-ink-600 bg-ink-800 pl-2.5 pr-1 py-1 text-ash-300">
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${family === 'llama' ? 'bg-amber-300' : 'bg-emerald-300'}`}
-            aria-hidden="true"
-          />
-          <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="bg-transparent pr-1 text-ash-100 focus:outline-none"
-          >
-            {models.length === 0 && <option value={model}>{model}</option>}
-            {models.map((m) => (
-              <option key={m.id} value={m.id} className="bg-ink-900 text-ash-100">
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="rounded-md border border-ink-600 bg-ink-800 px-2.5 py-1 text-ash-300">corpus · oil-sector</span>
-        <button className="rounded-md border border-ink-600 bg-ink-800 px-2.5 py-1 text-ash-300 hover:bg-ink-700">Export</button>
-      </div>
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-md border border-ink-600 bg-ink-800 px-2.5 py-1.5 text-xs text-ash-100 hover:bg-ink-700"
+      >
+        <FamilyMark family={current?.family || 'claude'} size={13} />
+        <span className="font-medium">{current?.label || model}</span>
+        <span className="text-ash-500">▾</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-2 w-80 overflow-hidden rounded-lg border border-ink-600 bg-ink-900 shadow-2xl shadow-black/60">
+          {grouped.map((g, gi) => {
+            const provider = providers?.[g.family];
+            const familyAvailable = provider?.available;
+            return (
+              <div key={g.family} className={gi > 0 ? 'border-t border-ink-700' : ''}>
+                <div className="flex items-center justify-between px-3 pt-3 pb-1">
+                  <div className="flex items-center gap-2">
+                    <FamilyMark family={g.family} size={13} />
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ash-400">{g.label}</span>
+                  </div>
+                  <span
+                    className={`rounded-sm px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${
+                      familyAvailable
+                        ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : 'border border-amber-500/30 bg-amber-500/10 text-amber-300'
+                    }`}
+                  >
+                    {familyAvailable ? 'live' : 'demo'}
+                  </span>
+                </div>
+                {!familyAvailable && (
+                  <div className="px-3 pb-1 text-[10px] text-ash-500">{provider?.hint || 'No key configured'}</div>
+                )}
+                <ul className="px-1.5 pb-1.5">
+                  {g.items.map((m) => {
+                    const isActive = m.id === model;
+                    return (
+                      <li key={m.id}>
+                        <button
+                          onClick={() => {
+                            setModel(m.id);
+                            setOpen(false);
+                          }}
+                          className={`flex w-full items-start justify-between gap-3 rounded-md px-2.5 py-2 text-left ${
+                            isActive ? 'bg-ink-800' : 'hover:bg-ink-800/60'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className={`text-sm ${isActive ? 'text-ash-100' : 'text-ash-200'}`}>{m.label}</div>
+                            <div className="mt-0.5 truncate text-[11px] text-ash-500">{m.tagline}</div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                            <span className="font-mono text-[10px] text-ash-500">{m.provider}</span>
+                            {isActive && (
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-ash-100">
+                                <path d="M4 12l5 5L20 6" />
+                              </svg>
+                            )}
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -198,6 +306,7 @@ const Message = ({ m }) => {
       </div>
     );
   }
+  const isDemo = m.model === 'demo';
   return (
     <div className="flex gap-3">
       <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-ink-600 bg-ink-900 text-ash-200">
@@ -206,8 +315,20 @@ const Message = ({ m }) => {
       <div className="flex-1">
         <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-ash-500">
           Mandata <span className="text-ash-600">·</span> {m.ts}
+          {m.model && (
+            <>
+              <span className="text-ash-600">·</span>
+              <span className={isDemo ? 'text-amber-300' : m.family === 'llama' ? 'text-amber-200' : 'text-emerald-300'}>
+                {isDemo
+                  ? 'demo mode'
+                  : m.family === 'llama'
+                    ? `Llama · ${m.model}`
+                    : `Claude · ${m.model}`}
+              </span>
+            </>
+          )}
         </div>
-        <div className="rounded-2xl rounded-tl-md border border-ink-700 bg-ink-900 px-5 py-4">
+        <div className={`rounded-2xl rounded-tl-md border bg-ink-900 px-5 py-4 ${isDemo ? 'border-amber-500/20' : 'border-ink-700'}`}>
           <p className="text-sm leading-relaxed text-ash-200">{m.content}</p>
           {m.citations && (
             <div className="mt-4 border-t border-ink-700 pt-3">

@@ -86,11 +86,13 @@ function upstreamLlamaModel(userFacingId) {
 }
 
 // ---------- Model registry ----------
+// Provider labels make it crystal-clear in the UI which company runs which model.
 const MODELS = [
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5', family: 'claude' },
-  { id: 'claude-opus-4-5',   label: 'Claude Opus 4.5',   family: 'claude' },
-  { id: 'llama-3.1-8b',      label: 'Llama 3.1 8B',      family: 'llama' },
-  { id: 'llama-3.3-70b',     label: 'Llama 3.3 70B',     family: 'llama' },
+  { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7',   family: 'claude', provider: 'Anthropic', tagline: 'Frontier reasoning · 1M context' },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', family: 'claude', provider: 'Anthropic', tagline: 'Balanced speed and quality' },
+  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',  family: 'claude', provider: 'Anthropic', tagline: 'Fastest, cheapest Claude' },
+  { id: 'llama-3.3-70b',     label: 'Llama 3.3 70B',     family: 'llama',  provider: 'Meta · Groq', tagline: 'Open-weights, hosted on Groq' },
+  { id: 'llama-3.1-8b',      label: 'Llama 3.1 8B',      family: 'llama',  provider: 'Meta · Groq', tagline: 'Cheapest open-weights option' },
 ];
 
 function resolveModel(id) {
@@ -120,17 +122,37 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '512kb' }));
 
+function familyAvailability() {
+  return {
+    claude: !!anthropic,
+    llama: LLAMA_PROVIDER === 'ollama' || !!LLAMA_API_KEY,
+  };
+}
+
 app.get('/api/health', (_req, res) => {
+  const avail = familyAvailability();
   res.json({
     ok: true,
     corpus: corpus.length,
-    anthropic: !!anthropic,
+    anthropic: avail.claude,
+    llama: avail.llama,
+    llamaProvider: LLAMA_PROVIDER,
     llamaBase: LLAMA_BASE_URL,
   });
 });
 
 app.get('/api/models', (_req, res) => {
-  res.json({ models: MODELS.map(({ llamaModel, ...m }) => m) });
+  const avail = familyAvailability();
+  res.json({
+    models: MODELS.map((m) => ({
+      ...m,
+      available: !!avail[m.family],
+    })),
+    providers: {
+      claude: { available: avail.claude, hint: avail.claude ? null : 'Set ANTHROPIC_API_KEY' },
+      llama: { available: avail.llama, provider: LLAMA_PROVIDER, hint: avail.llama ? null : 'Set LLAMA_API_KEY' },
+    },
+  });
 });
 
 app.get('/api/corpus/stats', (_req, res) => {
