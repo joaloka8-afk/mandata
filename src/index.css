@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(255,255,255,0.04), transparent 60%),
+    radial-gradient(900px 500px at -10% 30%, rgba(255,255,255,0.025), transparent 60%),
+    #050505;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #fff;
+  color: #000;
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at top, #000 30%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at top, #000 30%, transparent 70%);
+}
+
+.hairline {
+  background: linear-gradient(to right, transparent, rgba(255,255,255,0.16), transparent);
+}
+
+.glow-ring {
+  background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04) 40%, rgba(255,255,255,0.02) 70%, rgba(255,255,255,0.16));
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #2a2a2f; border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #3a3a40; }

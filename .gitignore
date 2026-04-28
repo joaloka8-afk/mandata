@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+npm-debug.log*
+
+# secrets
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# scraper cache (large, regenerable)
+scripts/cache/
+
+# editor
+.vscode/
+.idea/
