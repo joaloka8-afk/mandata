@@ -77,13 +77,21 @@ Open <http://localhost:5173/>.
 
 ## Corpus sources
 
-- **Sokkeldirektoratet (NPD) field facts** — curated public data, see `scripts/scrape.mjs`
-- **Petroleumstilsynet / NSM** — regulatory framework summaries
-- **NORSOK D-010** — well-integrity standard summary
-- **Wikipedia** — articles on the major NCS fields, operators, and the petroleum sector
+The corpus (~770 chunks, ~340k words) is built from six modular scrapers
+under `scripts/sources/`:
 
-The scraper caches all Wikipedia responses under `scripts/cache/` so re-runs
-are free.
+- **Sokkeldirektoratet** (sodir.no) — fields, regulations, geology, CO₂ storage
+- **Norsk Petroleum** (norskpetroleum.no) — every field on the NCS plus production/exports overviews
+- **Havtil** (havtil.no, formerly PSA) — HSE regime, supervision, RNNP, news
+- **Energidepartementet** (regjeringen.no/ed) — petroleum policy, white papers, history
+- **Wikipedia** — major fields, operators, geology
+- **Curated facts** — Mandata-authored fact sheets
+
+All responses are cached under `scripts/cache/` (7-day TTL, 30 days for
+Wikipedia). Re-runs only fetch pages that have aged out.
+
+See [SOURCES.md](SOURCES.md) for full licensing, attribution, and per-source
+chunk counts.
 
 ## Deploy to Railway
 
