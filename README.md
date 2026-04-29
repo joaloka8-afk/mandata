@@ -59,13 +59,17 @@ Open <http://localhost:5173/>.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET    | `/api/health`         | Liveness + corpus shape |
-| GET    | `/api/corpus/stats`   | Counts, types, sample sources |
-| POST   | `/api/query`          | `{ query, topK }` → ranked citations |
-| POST   | `/api/chat`           | `{ messages, topK, model }` → grounded answer + citations |
-| GET    | `/api/keys`           | List demo API keys |
-| POST   | `/api/keys`           | `{ name, rate }` → new key |
-| DELETE | `/api/keys/:id`       | Revoke a key |
+| GET    | `/api/health`             | Liveness, corpus shape, DB/Claude/Llama status |
+| GET    | `/api/corpus/stats`       | Counts, types, sample sources |
+| POST   | `/api/query`              | `{ query, topK }` → ranked citations |
+| POST   | `/api/chat`               | `{ messages, topK, model }` → grounded answer + citations |
+| POST   | `/api/auth/register`      | `{ email, password, displayName?, orgName? }` → creates account, sets session cookie |
+| POST   | `/api/auth/login`         | `{ email, password }` → sets session cookie |
+| POST   | `/api/auth/logout`        | Clears session cookie + deletes the row |
+| GET    | `/api/auth/me`            | `{ user }` for the active session, or `{ user: null }` |
+| GET    | `/api/keys`               | List the signed-in user's keys (DB) or seed list (demo) |
+| POST   | `/api/keys`               | `{ name, rate }` → new key, returns plaintext **once** |
+| DELETE | `/api/keys/:id`           | Revoke a key (DB only) |
 
 ## Pages
 
@@ -100,18 +104,52 @@ at `/api/*` and the built Vite frontend for everything else.
 
 ```
 1. Create a new Railway project from this repo.
-2. Set environment variables:
-     ANTHROPIC_API_KEY=sk-ant-…    (optional — enables Claude)
-     LLAMA_API_KEY=gsk_…           (optional — enables Llama via Groq)
-3. Deploy. Railway picks up nixpacks.toml automatically:
-     install → npm ci
-     build   → node scripts/scrape.mjs && npm run build
-     start   → node server/index.mjs
+2. Add a Postgres database (Railway → New → Postgres). It auto-injects
+   DATABASE_URL into your service.
+3. Apply the schema once:
+      railway connect Postgres
+      \i db/schema.sql
+   (or pipe it via `psql "$DATABASE_URL" -f db/schema.sql` from your laptop)
+4. Set the rest of the variables:
+      ANTHROPIC_API_KEY=sk-ant-…    (optional — enables Claude)
+      LLAMA_API_KEY=gsk_…           (optional — enables Llama via Groq)
+5. Deploy. Railway picks up nixpacks.toml automatically:
+      install → npm ci
+      build   → node scripts/scrape.mjs && npm run build
+      start   → node server/index.mjs
 ```
 
-If both keys are set, users can switch between Claude and Llama in the chat
-header. If neither is set, the app still works — it returns retrieval-only
-"demo mode" responses with full citations.
+The app degrades gracefully:
+- No `DATABASE_URL` → auth endpoints return 503; Console shows an in-memory demo key list.
+- No `ANTHROPIC_API_KEY` → Claude calls fall back to retrieval-only demo responses.
+- No `LLAMA_API_KEY` → same for Llama.
+
+## Database
+
+The schema is in [`db/schema.sql`](db/schema.sql). It's idempotent — safe
+to re-run.
+
+Tables:
+
+| Table | Purpose |
+|-------|---------|
+| `users` | accounts (email, bcrypt password hash, display name, org, role) |
+| `sessions` | active login sessions (server-side opaque ids) |
+| `api_keys` | per-user API keys (prefix + bcrypt hash, full key shown once on create) |
+| `audit_log` | append-only event log (auth, key, chat) |
+| `conversations` + `messages` | optional chat persistence per user |
+
+Apply with:
+
+```bash
+psql "$DATABASE_URL" -f db/schema.sql
+```
+
+Sweep expired sessions periodically:
+
+```sql
+DELETE FROM sessions WHERE expires_at < NOW();
+```
 
 ## Notes
 

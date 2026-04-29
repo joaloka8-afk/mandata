@@ -12,12 +12,16 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import Anthropic from '@anthropic-ai/sdk';
 import { BM25 } from './bm25.mjs';
+import { query, queryOne, dbAvailable, ping as dbPing } from './db.mjs';
+import { mount as mountAuth, attachUser, requireAuth, logEvent } from './auth.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = path.join(__dirname, '..', 'corpus', 'oil-sector.jsonl');
@@ -99,28 +103,35 @@ function resolveModel(id) {
   return MODELS.find((m) => m.id === id) || MODELS[0];
 }
 
-// ---------- In-memory API keys (demo) ----------
-const apiKeys = [
-  { id: 'k1', name: 'sleipner-prod',     preview: 'mdt_live_J9wA4v', created: '2025-08-12', rate: '500 RPS' },
-  { id: 'k2', name: 'sleipner-staging',  preview: 'mdt_test_4Hc8xG', created: '2025-09-30', rate: '50 RPS' },
-  { id: 'k3', name: 'data-ingest-batch', preview: 'mdt_live_p2nQ1Z', created: '2026-02-01', rate: '120 RPS' },
+// ---------- API keys (DB-backed when DATABASE_URL is set; demo otherwise) ----------
+// In demo mode (no DB) we keep a small in-memory seed list so the Console
+// UI is still usable.
+const demoApiKeys = [
+  { id: 'k1', name: 'sleipner-prod',     prefix: 'mdt_live_J9wA4v', preview: 'mdt_live_J9wA4v', created: '2025-08-12', rate: '500 RPS' },
+  { id: 'k2', name: 'sleipner-staging',  prefix: 'mdt_test_4Hc8xG', preview: 'mdt_test_4Hc8xG', created: '2025-09-30', rate: '50 RPS' },
+  { id: 'k3', name: 'data-ingest-batch', prefix: 'mdt_live_p2nQ1Z', preview: 'mdt_live_p2nQ1Z', created: '2026-02-01', rate: '120 RPS' },
 ];
 
-function newKey({ name = 'unnamed', rate = '100 RPS' } = {}) {
-  const tail = randomBytes(6).toString('base64url');
-  return {
-    id: 'k' + randomBytes(4).toString('hex'),
-    name,
-    preview: `mdt_live_${tail}`,
-    created: new Date().toISOString().slice(0, 10),
-    rate,
-  };
+// Generate a fresh key. Returns the full plaintext (shown ONCE) plus its
+// prefix and bcrypt hash for storage.
+async function mintApiKey() {
+  const tail = randomBytes(18).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 24);
+  const full = `mdt_live_${tail}`;
+  const prefix = full.slice(0, 14); // "mdt_live_" + 5 chars — enough for UI identification
+  const hash = await bcrypt.hash(full, 10);
+  return { full, prefix, hash };
 }
 
 // ---------- App ----------
 const app = express();
-app.use(cors());
+app.set('trust proxy', 1); // Railway terminates TLS in front of us
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '512kb' }));
+app.use(cookieParser());
+app.use(attachUser);
+
+// Mount auth routes (register, login, logout, me).
+mountAuth(app);
 
 function familyAvailability() {
   return {
@@ -129,8 +140,9 @@ function familyAvailability() {
   };
 }
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   const avail = familyAvailability();
+  const db = await dbPing();
   res.json({
     ok: true,
     corpus: corpus.length,
@@ -138,6 +150,7 @@ app.get('/api/health', (_req, res) => {
     llama: avail.llama,
     llamaProvider: LLAMA_PROVIDER,
     llamaBase: LLAMA_BASE_URL,
+    db: db.ok,
   });
 });
 
@@ -328,21 +341,74 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.get('/api/keys', (_req, res) => {
-  res.json({ keys: apiKeys });
+// --- API keys: DB-backed when DATABASE_URL is set + user is logged in ---
+app.get('/api/keys', async (req, res) => {
+  if (!dbAvailable()) return res.json({ keys: demoApiKeys, demo: true });
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  const rows = await query(
+    `SELECT id, name, prefix, rate_limit, created_at, last_used_at, revoked_at
+       FROM api_keys
+      WHERE user_id = $1 AND revoked_at IS NULL
+      ORDER BY created_at DESC`,
+    [req.user.id],
+  );
+  res.json({
+    keys: rows.map((k) => ({
+      id: k.id,
+      name: k.name,
+      prefix: k.prefix,
+      preview: `${k.prefix}…`,
+      created: k.created_at?.toISOString?.().slice(0, 10) || k.created_at,
+      rate: k.rate_limit,
+      lastUsed: k.last_used_at,
+    })),
+  });
 });
 
-app.post('/api/keys', (req, res) => {
-  const k = newKey(req.body || {});
-  apiKeys.unshift(k);
-  res.status(201).json({ key: k });
+app.post('/api/keys', async (req, res) => {
+  if (!dbAvailable()) {
+    return res.status(503).json({ error: 'Database not configured — cannot persist new keys.' });
+  }
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  try {
+    const { name = 'unnamed', rate = '100 RPS' } = req.body || {};
+    const minted = await mintApiKey();
+    const row = await queryOne(
+      `INSERT INTO api_keys (user_id, name, prefix, key_hash, rate_limit)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, prefix, rate_limit, created_at`,
+      [req.user.id, name, minted.prefix, minted.hash, rate],
+    );
+    await logEvent(req.user.id, 'key.create', { keyId: row.id, name }, req);
+    // Show the full plaintext key ONCE on creation — the client must store it.
+    res.status(201).json({
+      key: {
+        id: row.id,
+        name: row.name,
+        prefix: row.prefix,
+        plaintext: minted.full,
+        created: row.created_at?.toISOString?.().slice(0, 10) || row.created_at,
+        rate: row.rate_limit,
+      },
+    });
+  } catch (e) {
+    console.error('[keys] create', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.delete('/api/keys/:id', (req, res) => {
-  const idx = apiKeys.findIndex((k) => k.id === req.params.id);
-  if (idx < 0) return res.status(404).json({ error: 'not found' });
-  const [removed] = apiKeys.splice(idx, 1);
-  res.json({ removed });
+app.delete('/api/keys/:id', async (req, res) => {
+  if (!dbAvailable()) return res.status(503).json({ error: 'Database not configured' });
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  const row = await queryOne(
+    `UPDATE api_keys SET revoked_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+      RETURNING id, name, prefix`,
+    [req.params.id, req.user.id],
+  );
+  if (!row) return res.status(404).json({ error: 'not found' });
+  await logEvent(req.user.id, 'key.revoke', { keyId: row.id, name: row.name }, req);
+  res.json({ revoked: row });
 });
 
 // ---------- Static frontend (Railway one-service deploy) ----------
